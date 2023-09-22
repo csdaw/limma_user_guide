@@ -1,0 +1,157 @@
+---
+title: "Title"
+author: "Author"
+---
+
+Copied from User Guide dated 22 April 2023.
+
+## 16 Two-color Case Studies
+
+### 16.1 Swirl Zebrafish: A Single-Group Experiment
+
+In this section we consider a case study in which two RNA sources are compared directly on a set of replicate or dye-swap arrays. The case study includes reading in the data, data display and exploration, as well as normalization and differential expression analysis. The analysis of differential expression is analogous to a classical one-sample test of location for each gene.
+In this example we assume that the data is provided as a GAL file called `fish.gal` and raw SPOT output files and that these files are in the current working directory. The data used for this case study can be downloaded from `https://bioinf.wehi.edu.au/limmaGUI/DataSets.html`.
+
+```{r}
+dir("data/swirl")
+```
+
+
+**Background.** The experiment was carried out using zebrafish as a model organism to study the early development in vertebrates. Swirl is a point mutant in the BMP2 gene that affects the dorsal/ventral body axis. The main goal of the Swirl experiment is to identify genes with altered expression in the Swirl mutant compared to wild-type zebrafish.
+**The hybridizations.** Two sets of dye-swap experiments were performed making a total of four repli- cate hybridizations. Each of the arrays compares RNA from swirl fish with RNA from normal (“wild type”) fish. The experimenters have prepared a tab-delimited targets file called `SwirlSamples.txt` which describes the four hybridizations:
+
+```{r}
+library(limma)
+targets <- readTargets("data/swirl/SwirlSample.txt")
+targets
+```
+
+We see that slide numbers 81, 82, 93 and 94 were used to make the arrays. On slides 81 and 93, swirl RNA was labeled with green (Cy3) dye and wild type RNA was labeled with red (Cy5) dye. On slides 82 and 94, the labelling was the other way around.
+
+Each of the four hybridized arrays was scanned on an Axon scanner to produce a TIFF image, which was then processed using the image analysis software SPOT. The data from the arrays are stored in the four output files listed under `FileName`. Now we read the intensity data into an `RGList` object in R. The default for SPOT output is that `Rmean` and `Gmean` are used as foreground intensities and `morphR` and `morphG` are used as background intensities:
+
+```{r}
+RG <- read.maimages(targets, source = "spot", path = "data/swirl")
+RG
+```
+
+**The arrays.** The microarrays used in this experiment were printed with 8448 probes (spots), including 768 control spots. The array printer uses a print head with a 4x4 arrangement of print-tips and so the microarrays are partitioned into a 4x4 grid of tip groups. Each grid consists of 22x24 spots that were printed with a single print-tip.
+
+Unlike most image analysis software, SPOT does not store probe annotation in the output files, so we have to read it separately. The gene name associated with each spot is recorded in a GenePix array list (GAL) file:
+
+```{r}
+RG$genes <- readGAL("fish.gal", path = "data/swirl")
+RG$genes[1:30, ]
+```
+
+Because we are using SPOT output, the 4x4x22x24 print layout also needs to be set. The easiest way to do this is to infer it from the GAL file:
+
+```{r}
+RG$printer <- getLayout(RG$genes)
+```
+
+Image plots. It is interesting to look at the variation of background values over the array. Consider image plots of the red and green background for the first array:
+
+```{r}
+imageplot(log2(RG$Rb[, 1]), RG$printer, low = "white", high = "red")
+imageplot(log2(RG$Gb[, 1]), RG$printer, low = "white", high = "green")
+```
+
+Image plot of the un-normalized log-ratios or M-values for the first array:
+
+```{r}
+MA <- normalizeWithinArrays(RG, method = "none")
+imageplot(MA$M[, 1], RG$printer, zlim = c(-3, 3))
+```
+
+The `imageplot` function lies the slide on its side, so the first print-tip group is bottom left in this plot. We can see a red streak across the middle two grids of the 3rd row caused by a scratch or dust on the array. Spots which are affected by this artifact will have suspect M-values. The streak also shows up as darker regions in the background plots.
+
+**MA-plots.** An MA-plot plots the log-ratio of R vs G against the overall intensity of each spot. The log-ratio is represented by the M-value, M = log2(R) − log2(G), and the overall intensity by the A-value, A = (log2(R) + log2(G))/2. Here is the MA-plot of the un-normalized values for the first array:
+
+```{r}
+plotMD(MA)
+```
+
+The red streak seen on the image plot can be seen as a line of spots in the upper right of this plot. Now we plot the individual MA-plots for each of the print-tip groups on this array, together with the loess curves which will be used for normalization:
+
+```{r}
+plotPrintTipLoess(MA)
+```
+
+**Normalization.** Print-tip loess normalization:
+
+```{r}
+MA <- normalizeWithinArrays(RG)
+plotPrintTipLoess(MA)
+```
+
+We have normalized the M-values with each array. A further question is whether normalization is required between the arrays. The following plot shows overall boxplots of the M-values for the four arrays.
+
+```{r}
+boxplot(MA$M ~ col(MA$M), names = colnames(MA$M))
+```
+
+There is evidence that the different arrays have different spreads of M-values, so we will scale normalize between the arrays.
+
+```{r}
+MA <- normalizeBetweenArrays(MA, method = "scale")
+boxplot(MA$M ~ col(MA$M), names = colnames(MA$M))
+```
+
+Note that scale-normalization is not done routinely for all two-color data sets, in fact it is rarely done with newer platforms. However it does give good results on this data set. It should only be done when there is good evidence of a scale difference in the M-values.
+
+**Linear model.** First setup an appropriate design matrix. The negative numbers in the design matrix indicate the dye-swaps:
+
+```{r}
+design <- modelMatrix(targets, ref = "wild type")
+design
+```
+
+Now fit a simple linear model for each gene. This has the effect of estimating the average M-value for each gene, adjusting for the dye-swaps.
+
+```{r}
+fit <- lmFit(MA, design)
+fit
+```
+
+In the above fit object, `coefficients` is the average M-value for each gene and `sigma` is the sample standard deviations for each gene. Ordinary *t*-statistics for comparing mutant to wt could be computed by
+
+```{r, eval=FALSE}
+ordinary.t <- fit$coefficients / fit$stdev.unscaled / fit$sigma
+```
+
+We prefer though to use empirical Bayes moderated *t*-statistics which are computed below.
+
+Now create an mean difference plot displaying the log-fold-changes and average A-values for each
+gene.
+
+```{r}
+plotMD(fit)
+abline(0, 0, col = "blue")
+```
+
+**Empirical Bayes analysis.** We will now go on and compute empirical Bayes statistics for differential expression. The moderated *t*-statistics use sample standard deviations which have been squeezed towards a pooled standard deviation value.
+
+```{r}
+fit <- eBayes(fit)
+qqt(fit$t, df = fit$df.prior + fit$df.residual, pch = 16, cex = 0.2)
+abline(0, 1)
+```
+
+Visually there seems to be plenty of genes which are differentially expressed. We will obtain a summary table of some key statistics for the top genes.
+
+```{r}
+options(digits = 3)
+topTable(fit, number = 30)
+```
+
+The top gene is BMP2 which is significantly down-regulated in the Swirl zebrafish, as it should be because the Swirl fish are mutant in this gene. Other positive controls also appear in the top 30 genes in terms.
+
+In the table, `t` is the empirical Bayes moderated *t*-statistic, the corresponding P-values have been adjusted to control the false discovery rate and `B` is the empirical Bayes log odds of differential expression.
+
+```{r}
+plotMD(fit)
+top30 <- order(fit$lods, decreasing = TRUE)[1:30]
+text(fit$Amean[top30], fit$coefficients[top30], labels = fit$genes[top30, "Name"], cex = 0.8, col = "blue")
+```
+
