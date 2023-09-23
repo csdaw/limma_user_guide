@@ -5,11 +5,12 @@ author: "Author"
 
 Copied from User Guide dated 22 April 2023.
 
-## 16 Two-color Case Studies
+# Two-color Case Studies
 
-### 16.1 Swirl Zebrafish: A Single-Group Experiment
+## Swirl Zebrafish: A Single-Group Experiment
 
 In this section we consider a case study in which two RNA sources are compared directly on a set of replicate or dye-swap arrays. The case study includes reading in the data, data display and exploration, as well as normalization and differential expression analysis. The analysis of differential expression is analogous to a classical one-sample test of location for each gene.
+
 In this example we assume that the data is provided as a GAL file called `fish.gal` and raw SPOT output files and that these files are in the current working directory. The data used for this case study can be downloaded from `https://bioinf.wehi.edu.au/limmaGUI/DataSets.html`.
 
 ```{r}
@@ -18,6 +19,7 @@ dir("data/swirl")
 
 
 **Background.** The experiment was carried out using zebrafish as a model organism to study the early development in vertebrates. Swirl is a point mutant in the BMP2 gene that affects the dorsal/ventral body axis. The main goal of the Swirl experiment is to identify genes with altered expression in the Swirl mutant compared to wild-type zebrafish.
+
 **The hybridizations.** Two sets of dye-swap experiments were performed making a total of four repli- cate hybridizations. Each of the arrays compares RNA from swirl fish with RNA from normal (“wild type”) fish. The experimenters have prepared a tab-delimited targets file called `SwirlSamples.txt` which describes the four hybridizations:
 
 ```{r}
@@ -154,4 +156,128 @@ plotMD(fit)
 top30 <- order(fit$lods, decreasing = TRUE)[1:30]
 text(fit$Amean[top30], fit$coefficients[top30], labels = fit$genes[top30, "Name"], cex = 0.8, col = "blue")
 ```
+
+## Apoa1 Knockout Mice: A Two-Group Common-Reference Experiment
+
+In this section we consider a case study where two RNA sources are compared through a common reference RNA. The analysis of the log-ratios involves a two-sample comparison of means for each gene.
+
+In this example we assume that the data is available as an `RGList` in the data file `Apoa1.RData`. The data used for this case study can be downloaded from `https://bioinf.wehi.edu.au/limma`.
+
+**Background.** The data is from a study of lipid metabolism by [3]. The apolipoprotein AI (Apoa1) gene is known to play a pivotal role in high density lipoprotein (HDL) metabolism. Mice which have the Apoa1 gene knocked out have very low HDL cholesterol levels. The purpose of this experiment is to determine how Apoa1 deficiency affects the action of other genes in the liver, with the idea that this will help determine the molecular pathways through which Apoa1 operates.
+
+**Hybridizations.** The experiment compared 8 Apoa1 knockout mice with 8 normal C57BL/6 (”black six”) mice, the control mice. For each of these 16 mice, target mRNA was obtained from liver tissue and labelled using a Cy5 dye. The RNA from each mouse was hybridized to a separate microarray. Common reference RNA was labelled with Cy3 dye and used for all the arrays. The reference RNA was obtained by pooling RNA extracted from the 8 control mice.
+
+```{r, echo=FALSE}
+knitr::kable(
+  data.frame(
+    "Number of arrays" = rep(8, 2),
+    "Red" = c('Normal "black six" mice', "Apoa1 knockout"),
+    "Green" = rep("Pooled reference", 2),
+    check.names = FALSE
+  )
+)
+```
+
+This is an example of a single comparison experiment using a common reference. The fact that the comparison is made by way of a common reference rather than directly as for the swirl experiment makes this, for each gene, a two-sample rather than a single-sample setup.
+
+```{r}
+load("data/Apoa1.RData")
+# objects()
+names(RG)
+RG$targets
+MA <- normalizeWithinArrays(RG)
+cols <- MA$targets$Cy5
+cols[cols == "C57BL/6"] <- "blue"
+cols[cols == "ApoAI-/-"] <- "yellow"
+boxplot(MA$M ~ col(MA$M), names = rownames(MA$targets), col = cols, xlab = "Mouse", ylab = "M-values")
+```
+
+Since the common reference here is a pool of the control mice, we expect to see more differences from the pool for the knock-out mice than for the control mice. In terms of the above plot, this should translate into a wider range of M-values for the knock-out mice arrays than for the control arrays, and we do see this. Since the different arrays are not expected to have the same range of M-values, between-array scale normalization of the M-values is not appropriate here.
+
+Now we can go on to estimate the fold change between the two groups. In this case the design matrix has two columns. The coefficient for the second column estimates the parameter of interest, the log-ratio between knockout and control mice.
+
+```{r}
+design <- cbind("Control-Ref" = 1, "KO-Control" = MA$targets$Cy5 == "ApoAI-/-")
+design
+fit <- lmFit(MA, design)
+fit$coef[1:5, ]
+fit <- eBayes(fit)
+options(digits = 3)
+```
+
+Normally at this point one would just type
+
+```r
+topTable(fit, coef = 2)
+```
+
+However, the gene annotation is a bit wide for the printed page, so we will tell `topTable()` to show just one column of the annotation information:
+
+```{r}
+topTable(fit, coef = 2, number = 15, genelist = fit$genes$NAME)
+```
+
+Notice that the top gene is Apoa1 itself which is heavily down-regulated. Theoretically the M-value should be minus infinity for Apoa1 because it is the knockout gene. Several of the other genes are closely related. The top eight genes here were confirmed by independent assay subsequent to the microarray experiment to be differentially expressed in the knockout versus the control line.
+
+```{r}
+volcanoplot(fit, coef = 2, highlight = 8, names = fit$genes$NAME, main = "KO vs Control")
+```
+
+## Weaver Mutant Mice: A Composite 2x2 Factorial Experiment
+
+### Background
+
+This case study considers a more involved two-color analysis in which the RNA sources have a factorial structure with two factors.
+
+The study examined the development of neurons in wild-type and weaver mutant mice [7]. The weaver mutation affects cerebellar granule neurons, the most numerous cell-type in the central ner- vous system. Weaver mutant mice are characterized by a weaving gait. Granule cells are generated in the first postnatal week in the external granule layer of the cerebellum. In normal mice, the terminally differentiated granule cells migrate to the internal granule layer but in mutant mice the cells die before doing so, meaning that the mutant mice have strongly reduced numbers of cells in the internal granule layer. The expression level of any gene which is specific to mature granule cells, or is expressed in response to granule cell derived signals, is greatly reduced in the mutant mice.
+
+### Sample Preparation and Hybridizations
+
+At each time point (P11 = 11 days postnatal and P21 = 21 days postnatal) cerebella were isolated from two wild-type and two mutant littermates and pooled for RNA isolation. RNA was then divided into aliquots and labelled before hybridizing to the arrays. (This means that aliquots are technical replicates, arising from the same mice and RNA extraction. In our analysis here, we will ignore this complication and will instead treat the aliquots as if they were biological replicates. See Yang and Speed (2002) for a detailed discussion of this issue in the context of this experiment.) A pool of RNA was also made by combining the different RNA samples.
+
+There are four different treatment combinations, P11wt, P11mt, P21wt and P21mt, comprising a 2x2 factorial structure. The RNA samples were hybridized to ten two-color microarrays, spotted with a 20k Riken clone library. There are six arrays comparing the four different RNA sources to the RNA pool, and four arrays making direct comparisons between the four treatment combinations.
+
+The microarray images were scanned using SPOT image analysis software.
+
+### Data input
+
+The data used for this case study can be downloaded from `http://bioinf.wehi.edu.au/limma/ data/weaverfull.rar`. The data are provided courtesy of Drs Jean Yang and Elva Diaz.
+
+First read in the targets frame:
+
+```{r}
+library(limma)
+targets <- readTargets("data/weaverfull/targets.txt")
+rownames(targets) <- removeExt(targets$FileName)
+targets
+```
+
+Exploratory analysis showed that the segmented area for spots for these arrays was quite variable, with a median spot area just over 50 pixels. A small proportion of spots had very small segmented sizes, suggesting that the intensities for these spots might be unreliable. It was therefore decided to set a spot quality weight function, so any spot with an area less than 50 pixels will get reduced weight. The function is set so that any spot with zero area will get zero weight:
+
+```{r}
+wtfun <- function(x) pmin(x$area / 50, 1)
+```
+
+Then read the SPOT files containing the intensity data using file names recorded in the targets file. The data files are stored in the subdirectory `/spot`:
+
+```{r}
+RG <- read.maimages(targets, source = "spot", path = "data/weaverfull/spot", wt.fun = wtfun)
+```
+
+Finally, we set the print-tip layout. These arrays were printed using a print-head with 8 rows and 4 columns of print tips:
+
+```{r}
+RG$printer <- list(ngrid.r = 8, ngrid.c = 4, nspot.r = 25, nspot.c = 24)
+```
+
+### Annotation
+
+Probe annotation is contained a separate file. The rows in the annotation file are as for the intensity data. Columns give Riken chip rearray IDs, GenBank accession numbers and UniGene information.
+
+```{r}
+Annotation <- read.delim("data/weaverfull/091701RikenUpdatev3.txt", 
+                         comment.char = "", quote = "\"", check.names = FALSE, stringsAsFactors = FALSE)
+names(Annotation)
+```
+
 
