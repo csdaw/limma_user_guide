@@ -5,6 +5,18 @@ author: "Author"
 
 Copied from User Guide dated 22 April 2023.
 
+# Introduction
+
+# Preliminaries
+
+# Quick Start
+
+# Reading Microarray Data
+
+# Quality Assessment
+
+# Pre-Processing Two-Color Data
+
 # Two-color Case Studies
 
 ## Swirl Zebrafish: A Single-Group Experiment
@@ -280,4 +292,200 @@ Annotation <- read.delim("data/weaverfull/091701RikenUpdatev3.txt",
 names(Annotation)
 ```
 
+For our purposes, we will keep the Riken IDs and GenBank accessions, putting these into the data object:
 
+```{r}
+RG$genes <- Annotation[, c(1, 2)]
+colnames(RG$genes) <- c("RikenID", "GenBank")
+```
+
+Where possible, we find gene symbols corresponding to the GenBank accession numbers, by using the mouse organism package constructed from the NCBI database. Symbols can be found for only a little over 5000 of the probes.
+
+```{r}
+library(org.Mm.eg.db)
+```
+
+First we find the Entrez Gene ID for each accession number:
+
+```{r}
+EG.AN <- toTable(org.Mm.egACCNUM)
+i <- match(RG$genes$GenBank, EG.AN[, "accession"])
+EntrezID <- EG.AN[i, "gene_id"]
+```
+
+Then convert Entrez Gene IDs to symbols:
+
+```{r}
+EG.Sym <- toTable(org.Mm.egSYMBOL)
+i <- match(EntrezID, EG.Sym[, "gene_id"])
+RG$genes$Symbol <- EG.Sym[i, "symbol"]
+```
+
+### Quality Assessment and Normalization
+
+We also read in a spot-types file and set a range of control spots.
+
+```{r}
+spottypes <- readSpotTypes("spottypes.txt", path = "data/weaverfull")
+spottypes
+RG$genes$Status <- controlStatus(spottypes, RG)
+```
+
+MA-plots were examined for all the arrays. Here we give the plot for array 9 only:
+
+```{r}
+# CSD note, points not coloured exactly as in user guide
+plotMD(RG, column = 9, xlim = c(4, 15.5))
+```
+
+
+Here Buffer is an obvious negative control while 18S, GAPDH, Lysine, Threonine and Tubulin are single-gene positive controls, sometime called house-keeping genes. RikenTitration is a titration series of a pool of the entire Riken library, and can be reasonably expected to be non-differentially expressed. CerEstTitration is a titration of a pool of a cerebellum EST library. This will show higher expression in later mutant tissues. The Lys, Phe and Thr series are single-gene titration series which were not spiked-in in this case and can therefore be treated as negative controls.
+
+The negative control probe intensities are quite high, especially for the red channel and especially for array 7:
+
+```{r}
+negative <- RG$genes$Status %in% c("Buffer", "LysTitration", "PheTitration", "ThrTitration")
+par(mfrow = c(1, 2))
+boxplot(log2(RG$G[negative, ]), las = 2, main = "Green background", ylab = "log2-intensity", col = "green")
+boxplot(log2(RG$R[negative, ]), las = 2, main = "Red background", ylab = "log2-intensity", col = "red")
+par(mfrow = c(1,1))
+```
+
+Later on, we will investigate setting array quality weights.
+
+Now normalize the data. The Riken titration library, being based on a pool of a large number
+of non-specific genes, should not be differentially expressed. We can take advantage of this by upweighting these probes in the print-tip normalization step. Here we give double-weight to the titration library probes, although higher weights could also be considered:
+
+```{r}
+w <- modifyWeights(RG$weights, RG$genes$Status, "RikenTitration", 2)
+MA <- normalizeWithinArrays(RG, weights = w)
+```
+
+### Setting Up the Linear Model
+
+The experiment has a composite design, with some arrays comparing back to the RNA pool as a common reference, and other arrays making direct comparisons between the treatment conditions of interest. The simplest design matrix is that which compares all the RNA samples back to the RNA pool.
+
+```{r}
+design <- modelMatrix(targets, ref = "Pool")
+```
+
+We also add an intercept term to extract probe-specific dye effects:
+
+```{r}
+design <- cbind(Dye = 1, design)
+design
+```
+
+### Probe Filtering and Array Quality Weights
+
+First we remove control probes, leaving only the regular probes of the Riken library:
+
+```{r}
+regular <- MA$genes$Status == "Riken"
+MA2 <- MA[regular, ]
+MA2$genes$Status <- NULL
+```
+
+Then we estimate array quality weights:
+
+```{r}
+aw <- arrayWeights(MA2, design)
+options(digits = 3)
+aw
+```
+
+The array weights multiply the spot weights already in the data object:
+
+```{r}
+library(statmod)
+w <- matvec(MA2$weights, aw)
+```
+
+### Differential expression
+
+Fit the linear model:
+
+```{r}
+fit <- lmFit(MA2, design, weights = w)
+```
+
+Now extract all possible comparisons of interest as contrasts. We look for the mutant vs wt comparisons at 11 and 21 days, the time effects for mutant and wt, and the interaction terms:
+
+```{r}
+cont.matrix <- makeContrasts(
+  WT11.MT11 = P11mt - P11wt,
+  WT21.MT21 = P21mt - P21wt,
+  WT11.WT21 = P21wt - P11wt,
+  MT11.MT21 = P21mt - P11mt,
+  Int = (P21mt - P11mt) - (P21wt - P11wt),
+  levels = design
+)
+fit2 <- contrasts.fit(fit, cont.matrix)
+fit2 <- eBayes(fit2)
+```
+
+Adjustment for multiple testing, using Benjamini and Hochberg’s method to control the false dis- covery rate at 5% across all genes and all contrasts, leads to the following:
+
+```{r}
+results <- decideTests(fit2, method = "global")
+summary(results)
+```
+
+The probes that show significant interactions are those which develop differently in the mutant compared to the wild-type between days 11 and 21. To see these:
+
+```{r}
+topTable(fit2, coef = "Int")
+sessionInfo()
+```
+
+## Bob1 Mutant Mice: Arrays with Duplicate Spots
+
+In this section we consider a case study in which all genes (ESTs and controls) are printed more than once on the array. This means that there is both within-array and between-array replication for each gene. The structure of the experiment is therefore essentially a randomized block experiment for each gene. The approach taken here is to estimate a common correlation for all the genes for between within-array duplicates. The theory behind the approach is explained in [32]. This approach assumes that all genes are replicated the same number of times on the array and that the spacing between the replicates is entirely regular.
+
+In this example we assume that the data is available as an `RGList`.
+
+**Background.** This data is from a study of transcription factors critical to B cell maturation by Lynn Corcoran and Wendy Dietrich at the WEHI. Mice which have a targeted mutation in the Bob1 (aka Pou2af1 or OBF-1) transcription factor display a number of abnormalities in the B lymphocyte compartment of the immune system. Immature B cells that have emigrated from the bone marrow fail to differentiate into full fledged B cells, resulting in a notable deficit of mature B cells.
+
+**Arrays.** Arrays were printed at the Australian Genome Research Facility with expressed sequence tags (ESTs) from the National Institute of Aging 15k mouse clone library, plus a range of positive, negative and calibration controls. The arrays were printed using a 48 tip print head and 26x26 spots in each tip group. Data from 24 of the tip groups are given here. Every gene (ESTs and controls) was printed twice on each array, side by side by rows. The NIA15k probe IDs have been anonymized in the output presented here.
+
+**Hybridizations.** A retrovirus was used to add Bob back to a Bob deficient cell line. Two RNA sources were compared using 2 dye-swap pairs of microarrays. One RNA source was obtained from the Bob deficient cell line after the retrovirus was used to add GFP (”green fluorescent protein”, a neutral protein). The other RNA source was obtained after adding both GFP and Bob protein. RNA from Bob+GFP was labelled with Cy5 in arrays 2 and 4, and with Cy3 in arrays 1 and 4.
+
+**Image analysis.** The arrays were image analyzed using SPOT with “morph” background estima- tion.
+
+The data used for this case study can be downloaded from `http://bioinf.wehi.edu.au/limma/`. The file should be placed in the working directory of your R session. (This case study was last updated on 29 June 2006 using R 2.3.0 and limma 2.7.5.)
+
+```{r}
+library(limma)
+load("data/Bob.RData")
+# objects()
+design
+names(RG)
+RG$genes[1:40, ]
+```
+
+Although there are only four arrays, we have a total of eight spots for each gene, and more for the controls. Naturally the two M-values obtained from duplicate spots on the same array are highly correlated. The problem is how to make use of the duplicate spots in the best way. The approach taken here is to estimate the spatial correlation between the adjacent spots using REML and then to conduct the usual analysis of the arrays using generalized least squares.
+
+First normalize the data using print-tip loess regression. The SPOT morph background ensures that the default background subtraction can be used without inducing negative intensities.
+
+```{r}
+MA <- normalizeWithinArrays(RG)
+```
+
+Then remove the control probes:
+
+```{r}
+MA2 <- MA[MA$genes$Library == "NIA15k", ]
+```
+
+Now estimate the spatial correlation. We estimate a correlation term by REML for each gene, and then take a trimmed mean on the atanh scale to estimate the overall correlation. This command will probably take at least a few minutes depending on the speed of your computer.
+
+```{r}
+options(digits = 3)
+corfit <- duplicateCorrelation(MA2, design, ndups = 2) # A slow computation!
+corfit$consensus.correlation
+boxplot(tanh(corfit$atanh.correlations))
+fit <- lmFit(MA2, design, ndups = 2, correlation = corfit$consensus)
+fit <- eBayes(fit)
+topTable(fit, n = 30)
+volcanoplot(fit)
+```
