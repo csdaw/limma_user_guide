@@ -1,11 +1,73 @@
 ---
-title: "Title"
-author: "Author"
+title: "`limma`: Linear Models for Microarray and RNA-Seq Data User's Guide"
+author: "Gordon K. Smyth, Matthew Ritchie, Natalie Thorne, James Wettenhall, Wei Shi and Yifang Hu.\nBioinformatics & Computational Biology Division, The Walter and Eliza Hall Institute of Medical Research, Melbourne, Australia"
+date: "First edition 2 December 2002. Last revised 14 April 2025"
+output: 
+  pdf_document:
+    number_sections: true
 ---
 
-Copied from User Guide dated 22 April 2023.
+This free open-source software implements academic research by the authors and 
+co-workers. If you use it, please support the project by citing the appropriate 
+journal articles listed in Section 2.1.
 
 # Introduction
+
+Limma is a package for the analysis of gene expression data arising from 
+microarray or RNA-seq technologies [29]. A core capability is the use of linear 
+models to assess differential expression in the context of multi-factor designed
+experiments. Limma provides the ability to analyze comparisons between many RNA 
+targets simultaneously. It has features that make the analyses stable even for
+experiments with small number of arrays — this is achieved by borrowing 
+information across genes. It is specially designed for analysing complex 
+experiments with a variety of experimental conditions and predictors. The linear 
+model and differential expression functions are applicable to data from any 
+quantitative gene expression technology including microarrays, RNA-seq and 
+quantitative PCR. Limma can handle both single-channel and two-color microarrays.
+
+This guide gives a tutorial-style introduction to the main limma features but 
+does not describe every feature of the package. A full description of the 
+package is given by the individual function help documents available from the R 
+online help system. To access the online help, type `help(package=limma)` at the 
+R prompt or else start the html help system using `help.start()` or the Windows 
+drop-down help menu.
+
+Limma provides a strong suite of functions for reading, exploring and 
+pre-processing data from two-color microarrays. The Bioconductor package marray 
+provides alternative functions for reading and normalizing spotted two-color 
+microarray data. The marray package provides flexible location and scale 
+normalization routines for log-ratios from two-color arrays. The limma package 
+overlaps with marray in functionality but is based on a more general concept of 
+within-array and between-array normalization as separate steps. If you are using 
+limma in conjunction with marray, see Section 6.4.
+
+Limma can read output data from a variety of image analysis software platforms, 
+including GenePix, ImaGene etc. Either one-channel or two-channel formats can be 
+processed.
+
+The Bioconductor package affy provides functions for reading and normalizing 
+Affymetrix microarray data. Advice on how to use limma with the affy package is 
+given throughout the User’s Guide, see for example Section 8.2 and the _E. coli_ 
+and estrogen case studies.
+
+Functions for reading and pre-processing expression data from Illumina BeadChips 
+were introduced in limma 3.0.0. See the case study in Section 17.3 for an 
+example of these. Limma can also be used in conjunction with the vst or 
+beadarray packages for pre-processing Illumina data.
+
+From version 3.9.19, limma includes functions to analyse RNA-seq experiments, 
+demonstrated in Case Study 11.8. The approach is to convert a table of sequence 
+read counts into an expression object which can then be analysed as for 
+microarray data.
+
+This guide describes limma as a command-driven package. Graphical user 
+interfaces to the most commonly used functions in limma are available through 
+the packages limmaGUI [42], for two-color data, or affylmGUI [41], for 
+Affymetrix data. Both packages are available from Bioconductor.
+
+This user’s guide should be correct for R Versions 2.8.0 through 4.0.0 and limma 
+versions 2.16.0 through 3.44.0. The limma homepage is 
+https://bioinf.wehi.edu.au/limma.
 
 # Preliminaries
 
@@ -80,7 +142,7 @@ imageplot(MA$M[, 1], RG$printer, zlim = c(-3, 3))
 
 The `imageplot` function lies the slide on its side, so the first print-tip group is bottom left in this plot. We can see a red streak across the middle two grids of the 3rd row caused by a scratch or dust on the array. Spots which are affected by this artifact will have suspect M-values. The streak also shows up as darker regions in the background plots.
 
-**MA-plots.** An MA-plot plots the log-ratio of R vs G against the overall intensity of each spot. The log-ratio is represented by the M-value, M = log2(R) − log2(G), and the overall intensity by the A-value, A = (log2(R) + log2(G))/2. Here is the MA-plot of the un-normalized values for the first array:
+**MA-plots.** An MA-plot plots the log-ratio of R vs G against the overall intensity of each spot. The log-ratio is represented by the M-value, M = log2(R) - log2(G), and the overall intensity by the A-value, A = (log2(R) + log2(G))/2. Here is the MA-plot of the un-normalized values for the first array:
 
 ```{r}
 plotMD(MA)
