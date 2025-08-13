@@ -1033,6 +1033,205 @@ topTable(fit2, coef = "E10", n = 20)
 sessionInfo()
 ```
 
+## Comparing Mammary Progenitor Cell Populations with Illumina BeadChips
+
+### Introduction
+
+This case study examines the expression profiles of adult mammary stem cells and of progenitor and mature mammary luminal cells. The data was first published by Lim et al [18], who used the expression profiles to show that luminal progenitor cells are the likely cell of origin for basal-like breast cancer.
+
+The data files used in this case study can be downloaded from http://bioinf.wehi.edu.au/marray/IlluminaCaseStudy. The expression data files are provided as gzip files and will need to be uncompressed before they can be used for a limma analysis. To run the analysis described here, download and unzip the data files and set the working directory of R to the folder containing the files.
+
+
+### The target RNA samples
+
+The data consists of three files:
+
+```{r}
+dir("data/mammary")
+```
+
+First read the targets file describing the target RNA samples.
+
+```{r}
+library(limma)
+targets <- readTargets("data/mammary/targets.txt")
+targets
+```
+
+Breast tissue was obtained from three healthy human donors who were undergoing reduction mammoplasties. Epithelial cells were sorted into three subpopulations enriched for mammary stem cells (MS), luminal progenitor cells (LP) and mature luminal cells (ML) [18]. The MS, LP and ML cells representative a lineage of luminal cells use to construct the ducts used to transport milk in the breast [40]:
+
+... TODO put figure in. ...
+
+Stromal cells were also profiles as a comparison group. There were therefore four cell populations from each person. RNA was extracted from freshly sorted cells, making twelve RNA samples in total.
+
+### The expression profiles
+
+The RNA samples were hybridized to two Illumina HumanWG-6 version 3 BeadChips. Each BeadChip is able to accommodate six samples. The BeadChips images were scanned and summarized using BeadStudio. Un-normalized summary probe profiles were exported from BeadStudio to tab-delimited text files.
+
+Separate files were written for regular probes and for control probes. The file probe `profile.txt` contains the expression profiles for regular probes, designed to interrogate the expression levels of genes. `control probe profile.txt` contains the profiles of control probes, including negative control probes. Note that BeadStudio by default writes the profiles for all the samples to the same two files.
+
+We read in the expression profiles for both regular and control probes, telling `read.ilm` that we wish to read the detection p-values as well as the expression values:
+
+```{r}
+x <- read.ilmn(
+  files = "data/mammary/probe profile.txt",
+  ctrlfiles = "data/mammary/control probe profile.txt",
+  other.columns = "Detection"
+)
+```
+
+This reads a `EListRaw` object. There are about 750 negative probes and about 49,000 regular probes:
+
+```{r}
+table(x$genes$Status)
+```
+
+The component E contains the expression value for each probe:
+
+```{r}
+options(digits = 3)
+head(x$E)
+```
+
+The intensities vary from about 5 to 14 on the log2 scale:
+
+```{r}
+boxplot(log2(x$E), range = 0, ylab = "log2 intensity")
+```
+
+### How many probes are truly expressed?
+
+The detection values contain p-values for testing whether each probe is more intense than the negative control probes. Small values are evidence that the probe corresponds to a truly expressed gene:
+
+```{r}
+head(x$other$Detection)
+```
+
+We can go further than this and estimate the overall proportion of the regular probes that correspond to expressed transcript, using the method of Shi et al [32].
+
+```{r}
+pe <- propexpr(x)
+dim(pe) <- c(4, 3)
+dimnames(pe) <- list(CellType = c("MS", "Stroma", "ML", "LP"), Donor = c(1, 2, 3))
+pe
+```
+
+The proportion of probes that are expressed varies from 50–56%. The average is 52.5%.
+
+### Normalization and filtering
+
+Background correction and normalize:
+
+```{r}
+y <- neqc(x)
+```
+
+The `neqc` functions performs normexp background correction using negative controls, then quantile normalizes and finally log2 transforms [33]. It also automatically removes the control probes, leaving only the regular probes in y:
+
+```{r}
+dim(y)
+```
+
+Filter out probes that are not expressed. We keep probes that are expressed in at least three arrays according to a detection p-values of 5%:
+
+```{r}
+expressed <- rowSums(y$other$Detection < 0.05) >= 3
+y <- y[expressed, ]
+dim(y)
+```
+
+A multi-dimensional scaling plot shows that the cell types are cell separated:
+
+```{r}
+plotMDS(y, labels = targets$CellType)
+```
+
+### Within-patient correlations
+
+The study involves multiple cell types from the same patient. Arrays from the same donor are not independent, so we need to estimate the within-donor correlation:
+
+```{r}
+ct <- factor(targets$CellType)
+design <- model.matrix(~ 0 + ct)
+colnames(design) <- levels(ct)
+dupcor <- duplicateCorrelation(y, design, block = targets$Donor)
+dupcor$consensus.correlation
+```
+
+As expected, the within-donor correlation is small but positive.
+
+### Differential expression between cell types
+
+Now we look for differentially expressed genes. We make all possible pairwise comparisons between the epithelial cell types, allowing for the correlation within donors:
+
+```{r}
+fit <- lmFit(
+  y,
+  design,
+  block = targets$Donor, 
+  correlation=dupcor$consensus.correlation
+)
+
+contrasts <- makeContrasts(
+  ML - MS, 
+  LP - MS, 
+  ML - LP, 
+  levels = design
+)
+fit2 <- contrasts.fit(fit, contrasts)
+fit2 <- eBayes(fit2, trend = TRUE)
+summary(decideTests(fit2, method = "global"))
+```
+
+Top ten differentially expressed probes between ML and MS:
+
+```{r}
+topTable(fit2, coef = 1)
+```
+
+### Signature genes for luminal progenitor cells
+
+Now we find genes uniquely expressed in LP cells, as compared to MS and ML. We refit the linear model, making LP the reference cell type:
+
+```{r}
+ct <- relevel(ct, ref = "LP")
+design <- model.matrix(~ ct)
+fit <- lmFit(
+  y, 
+  design, 
+  block = targets$Donor,
+  correlation = dupcor$consensus.correlation
+)
+fit2 <- fit[, c("ctMS","ctML")]
+fit2 <- eBayes(fit2, trend = TRUE)
+```
+
+The we find all those genes that are up-regulated in LP vs both MS and ML, using a 2-fold-change and 5% FDR:
+
+```{r}
+results <- decideTests(fit2, lfc = 1)
+vennDiagram(results, include = c("up", "down"))
+```
+
+There are 197 positive signature genes and 413 negative. To see the top positive signature genes with their fold-changes:
+
+```{r}
+LP.sig <- rowSums(results > 0) == 2
+topTable(fit2[LP.sig, ])
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
