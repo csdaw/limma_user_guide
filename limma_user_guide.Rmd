@@ -917,6 +917,121 @@ plotMD(fit, coef = "Strainlrp-", status = results)
 
 ## Effect of Estrogen on Breast Cancer Tumor Cells: A 2x2 Factorial Experiment with Affymetrix Array
 
+This data is from the estrogen package on Bioconductor. A subset of the data is also analyzed in the factDesign package vignette. To repeat this case study you will need to have the R packages affy, estrogen and hgu95av2cdf installed.
+
+The data gives results from a 2x2 factorial experiment on MCF7 breast cancer cells using Affymetrix HGU95av2 arrays. The factors in this experiment were estrogen (present or absent) and length of exposure (10 or 48 hours). The aim of the study is the identify genes which respond to estrogen and to classify these into early and late responders. Genes which respond early are putative direct-target genes while those which respond late are probably downstream targets in the molecular pathway.
+
+First load the required packages:
+
+```{r}
+library(limma)
+library(affy)
+library(hgu95av2cdf)
+```
+
+The data files are contained in the `extdata` directory of the estrogen package.
+
+```{r}
+datadir <- file.path(find.package("estrogen"), "extdata")
+dir(datadir)
+```
+
+The targets file is called phenoData.txt. We see there are two arrays for each experimental condition, giving a total of 8 arrays.
+
+```{r}
+targets <- readTargets("phenoData.txt", path = datadir, sep = "", row.names = "filename")
+targets
+```
+
+Now read the cel files into an AffyBatch object and normalize using the `rma()` function from the affy package:
+
+```{r}
+ab <- ReadAffy(filenames = targets$filename, celfile.path = datadir)
+eset <- rma(ab)
+```
+
+By default, the only probe-set annotation contained in `eset` is the Affymetrix ID number. We will add gene symbols to the data object now, so that they will be automatically included in limma results tables later on.
+
+```{r}
+library(annotate)
+library(hgu95av2.db)
+ID <- featureNames(eset)
+Symbol <- getSYMBOL(ID,"hgu95av2.db")
+fData(eset) <- data.frame(Symbol = Symbol)
+```
+
+There are many ways to construct a design matrix for this experiment. Given that we are interested in the early and late estrogen responders, we can choose a parametrization which includes these two contrasts.
+
+```{r}
+treatments <- factor(
+  c(1, 1, 2, 2, 3, 3, 4, 4),
+  labels = c("e10", "E10", "e48", "E48")
+)
+contrasts(treatments) <- cbind(
+  Time = c(0, 0, 1, 1),
+  E10 = c(0, 1, 0, 0),
+  E48 = c(0, 0, 0, 1)
+)
+design <- model.matrix(~treatments)
+colnames(design) <- c("Intercept", "Time", "E10", "E48")
+```
+
+The second coefficient picks up the effect of time in the absence of estrogen. The third and fourth coefficients estimate the log2-fold change for estrogen at 10 hours and 48 hours respectively.
+
+```{r}
+fit <- lmFit(eset, design)
+```
+
+We are only interested in the estrogen effects, so we choose a contrast matrix which picks these
+two coefficients out:
+
+```{r}
+cont.matrix <- cbind(
+  E10 = c(0, 0, 1, 0),
+  E48 = c(0, 0, 0, 1)
+)
+fit2 <- contrasts.fit(fit, cont.matrix)
+fit2 <- eBayes(fit2)
+```
+
+We can examine which genes respond to estrogen at either time using the moderated F-statistics on 2 degrees of freedom. The moderated F p-value is stored in the component `fit2$F.p.value`.
+
+What p-value cutoff should be used? One way to decide which changes are significant for each gene would be to use Benjamini and Hochberg’s method to control the false discovery rate across all the genes and both tests:
+
+```{r}
+results <- decideTests(fit2, method = "global")
+```
+
+Another method would be to adjust the F-test p-values rather than the t-test p-values:
+
+```{r}
+results <- decideTests(fit2, method = "nestedF")
+```
+
+Here we use a more conservative method which depends far less on distributional assumptions, which is to make use of control and spike-in probe-sets which theoretically should not be differentially-expressed. The smallest p-value amongst these controls turns out to be about 0.00014:
+
+```{r}
+i <- grep("AFFX", featureNames(eset))
+summary(fit2$F.p.value[i])
+```
+
+So a cutoff p-value of 0.0001, say, would conservatively avoid selecting any of the control probe-sets as differentially expressed:
+
+```{r}
+results <- classifyTestsF(fit2, p.value = 0.0001)
+summary(results)
+table(E10 = results[, 1], E48 = results[, 2])
+vennDiagram(results, include = "up")
+vennDiagram(results,include="down")
+```
+
+We see that 87 genes were up regulated at both 10 and 48 hours, 29 only at 10 hours and 52 only at 48 hours. Also, 29 genes were down-regulated throughout, 11 only at 10 hours and 47 only at 48 hours. No genes were up at one time and down at the other. `topTable` gives a detailed look at individual genes. Estrogen effect at 10 hours:
+
+```{r}
+options(digits = 3)
+topTable(fit2, coef = "E10", n = 20)
+sessionInfo()
+```
 
 
 
