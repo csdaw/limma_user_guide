@@ -1220,18 +1220,373 @@ LP.sig <- rowSums(results > 0) == 2
 topTable(fit2[LP.sig, ])
 ```
 
+## Time Course Effects of Corn Oil on Rat Thymus with Agilent 4x44K Arrays
+
+### Introduction
+
+This case study analyses a time-course experiment using single-channel Agilent Whole Rat Genome Microarray 4x44K v3 arrays.
+
+The experiment concerns the effect of corn oil on gene expression in the thymus or rats. The data was submitted by Hong Weiguo to ArrayExpress as series E-GEOD-33005. The description of the experiment reads:
+
+> “To investigate the effects of corn oil (CO), common drug vehicle, on the gene expression profiles in rat thymus with microarray technique. Female Wistar Rats were administered daily with normal saline (NS), CO 2, 5, 10 ml/kg for 14 days, respectively. Then, the thymus samples of rats were collected for microarray test and histopathology examination. The microarray data showed that 0, 40, 458 differentially expressed genes (DEGs) in 2, 5, 10 ml/kg CO group compared to NS group, respectively. The altered genes were associated with immune response, cellular response to organic cyclic substance, regulation of fatty acid beta-oxidation, et al. However, no obvious histopathologic change was observed in the three CO dosage groups. These data show that 10 ml/kg CO, that dosage has been determined as the vehicle in drug safety assessment, can cause obvious influence on gene expression in rat thymus. Our study suggest that the dosage of CO gavage as the vehicle for water-in-soluble agents in drug development should be no more than 5 ml/kg if agents’ molecular effects in thymus want to be assessed. Gene expression in thymus from female Wistar rats daily administered with 2, 5, 10 ml/kg of corn oil or 10 ml/kg of saline by gavage for 14 consecutive days were measured using Agilent Rat Whole Genome 8×60K array.”
+
+### Data availability
+
+All files were downloaded from http://www.ebi.ac.uk/arrayexpress/experiments/E-GEOD-33005. The data is also available as GEO series GSE33005.
+
+Using R, the data can be downloaded to your working directory by:
+
+```{r, eval=FALSE}
+URL <- "https://www.ebi.ac.uk/arrayexpress/files/E-GEOD-33005"
+URL2 <- "ftp://ftp.ebi.ac.uk/pub/databases/microarray/data/experiment/GEOD/E-GEOD-33005"
+SDRF.file <- "E-GEOD-33005.sdrf.txt"
+Data.file <- "E-GEOD-33005.raw.1.zip"
+output.dir <- "data/rat_thymus/"
+download.file(paste(URL, SDRF.file, sep = "/"), paste0(output.dir, SDRF.file))
+options(timeout = max(300, getOption("timeout")))
+download.file(paste(URL2, Data.file, sep = "/"), paste0(output.dir, Data.file))
+unzip(paste0(output.dir, Data.file), exdir = output.dir)
+```
+
+```{r}
+SDRF <- read.delim(paste0(output.dir, SDRF.file), check.names = FALSE, stringsAsFactors = FALSE)
+SDRF[, c("Array Data File", "Characteristics[treatment]")]
+```
+
+We are interested in the treatment column:
+
+```{r}
+Treatment <- SDRF[, "Characteristics[treatment]"]
+```
+
+We set the saline control to be the first level of the `Treatment` factor.
+
+```{r}
+levels <- c("10 ml/kg saline", "2 ml/kg corn oil", "5 ml/kg corn oil","10 ml/kg corn oil")
+Treatment <- factor(Treatment, levels = levels)
+```
+
+Next read the intensity data:
+
+```{r}
+x <- read.maimages(
+  paste0(output.dir, SDRF[,"Array Data File"]),
+  source = "agilent", 
+  green.only = TRUE, 
+  other.columns = "gIsWellAboveBG"
+)
+```
+
+Note that we have read in the extra column `gIsWellAboveBG`, which records whether the intensity of each spot is considered above the background level for that array. This column will help us later with probe filtering. The data has 44,254 probes and 19 arrays:
+
+```{r}
+library(RnAgilentDesign028282.db)
+x$genes$EntrezID <- mapIds(
+  RnAgilentDesign028282.db, x$genes$ProbeName,
+  keytype = "PROBEID", column = "ENTREZID"
+)
+x$genes$Symbol <- mapIds(
+  RnAgilentDesign028282.db, x$genes$ProbeName,
+  keytype = "PROBEID", column = "SYMBOL"
+)
+
+x$genes[201:205, ]
+```
+
+### Background correction and normalize
+
+We use normexp background correction followed by quantile normalization:
+
+```{r}
+y <- backgroundCorrect(x, method = "normexp")
+y <- normalizeBetweenArrays(y, method = "quantile")
+```
+
+### Gene filtering
+
+We will filter out control probes as indicated by the `ControlType` column:
+
+```{r}
+Control <- y$genes$ControlType == 1L
+```
+
+We will also filter out probes with no Entrez Gene Id or Symbol:
+
+```{r}
+NoSymbol <- is.na(y$genes$Symbol)
+```
+
+Finally, we will filter probes that don’t appear to be expressed. We keep probes that are above background on at least four arrays (because there are four replicates of each treatment):
+
+```{r}
+IsExpr <- rowSums(y$other$gIsWellAboveBG > 0) >= 4
+```
+
+Now we select the probes to keep in a new data object yfilt:
+
+```{r}
+yfilt <- y[!Control & !NoSymbol & IsExpr, ]
+dim(yfilt)
+```
+
+To be tidy, we remove annotation columns we no longer need:
+
+```{r}
+yfilt$genes <- yfilt$genes[, c("ProbeName", "Symbol", "EntrezID")]
+head(yfilt$genes)
+```
+
+### Differential expression
+
+Now we can find genes differentially expressed for the corn oil treatments compared to the saline control:
+
+```{r}
+design <- model.matrix(~ Treatment)
+fit <- lmFit(yfilt, design)
+fit <- eBayes(fit, trend = TRUE, robust = TRUE)
+summary(decideTests(fit[, -1]))
+```
+
+t appears that only the 10 ml/kg treatment is different from the saline control. The top 20 genes for the 10 ml/kg treatment are as follows:
+
+```{r}
+topTable(fit, coef = 4, n = 20)
+```
+
+### Gene ontology analysis
+
+```{r}
+# TODO: add GO.db dependency
+g <- goana(fit, coef = 4, species = "Rn", geneid = "EntrezID")
+topGO(g, n = 20, truncate = "50")
+```
+
+```{r}
+sessionInfo()
+```
+
+# RNA-Seq Case Studies
+
+## Profiles of Yoruba HapMap Individuals
+
+### Background
+
+RNA-seq profiles were made of cell lines derived from B-lymphocytes from 69 different Yoruba individuals from Ibadan, Nigeria [25] [26]. The profiles were generated as part of the International HapMap project [12]. RNA from each individual was sequenced on at least two lanes of an Illumina Genome Analyser 2. The study group here is essentially an opportunity sample and the individuals are likely to be genetically diverse. In this analysis we look at genes that are differentially expressed between males and female.
+
+This case study requires limma 3.9.19 or later.
+
+### Data availability
+
+The raw FASTQ files used for this example are available from the URLs given below. For those who wish to skip the alignment and count summarization steps, the DGEList object y used for the statistical analysis can be downloaded from http://bioinf.wehi.edu.au/limma/.
+
+### Yoruba Individuals and FASTQ Files
+
+Sequence reads of the Yoruba HapMap cell lines are available at Pritchard Lab’s eQTL resources at http://eqtl.uchicago.edu/RNA_Seq_data/unmapped_reads/ in FASTQ format. Sample information are recorded at Pritchard Lab’s eQTL resources at http://eqtl.uchicago.edu/RNA_Seq_data/list_lanes_pickrell_2010_plosgenetics. Genders of the individuals are available at the International HapMap Project NHGRI Repository at http://ccr.coriell.org/. We will only use the read sequenced at Argonne National Laboratory. All lanes from the Argonne center were sequenced with 46 bp reads.
+
+```{r}
+Targets <- read.delim("data/yoruba/targets.txt")
+Targets
+```
+
+### Mapping reads to the reference genome
+
+...
+
+```{r}
+Targets$concentration <- factor(Targets$concentration)
+```
 
 
+...
+
+```{r}
+col.concent <- c("gold" , "orange", "red")
+```
 
 
+### Annotation
 
+...
 
+### DGEList object
 
+Form a DGEList object combining the counts and associated annotation:
 
+```{r}
+library(edgeR)
+# y <- DGEList(counts = Counts, genes = Ann)
+load("data/yoruba/Yoruba.RData")
+```
 
+### Filtering
 
+Keep genes with total counts more than 50.
 
+```{r}
+A <- rowSums(y$counts)
+isexpr <- A > 50
+```
 
+Keep only genes with defined annotation:
 
+```{r}
+hasannot <- rowSums(is.na(y$genes)) == 0
+y <- y[isexpr & hasannot, , keep.lib.size = FALSE]
+dim(y)
+```
+
+### Scale normalization
+
+Apply scale normalization:
+
+```{r}
+y <- calcNormFactors(y)
+```
+
+Separation of female and male profiles is evident from an MDS plot.
+
+```{r}
+Gender <- substring(Targets$gender, 1, 1)
+plotMDS(
+  y, labels = Gender, top = 50, 
+  col = ifelse(Gender == "M", "blue", "red"), 
+  gene.selection = "common",
+  prior.count = 5
+)
+```
+
+Separation of low cDNA concentration from high cDNA concentration is evident from an MDS plot.
+
+```{r}
+plotMDS(y, labels = Gender, col = col.concent[Targets$concentration], prior.count = 5)
+legend("topleft", legend = c("1.5", "2.5", "3.5"), col = col.concent, pch = 15)
+```
+
+### Linear modeling
+
+Create design matrix.
+
+```{r}
+design <- model.matrix(~ gender + concentration, data = Targets)
+```
+
+Use `voom()` [15] to convert the read counts to log2-cpm, with associated weights, ready for linear modelling:
+
+```{r}
+v <- voom(y, design)
+```
+
+Estimate the correlation between the duplicated cell lines that were sequenced more than once.
+
+```{r}
+cor <- duplicateCorrelation(v, design, block = Targets$cellline)
+cor$consensus
+```
+
+The intra cell line correlation will change the voom weights slightly, so we run `voom` a second time:
+
+```{r}
+v <- voom(y, design, plot = TRUE, block = Targets$cellline, correlation = cor$consensus)
+```
+
+Similarly, we run update the correlation for the new voom weights:
+
+```{r}
+cor <- duplicateCorrelation(v, design, block = Targets$cellline)
+cor$consensus
+```
+
+The correlation has hardly changed on the second iteration.
+
+Now find genes differentially expression between male and females. Positive log-fold-changes mean higher in males.
+
+```{r}
+fit <- lmFit(v, design, block = Targets$cellline, correlation = cor$consensus)
+fit <- eBayes(fit)
+summary(decideTests(fit))
+topTable(fit, coef = "genderMale", n = Inf, sort = "p", p = 0.05)[, -1]
+```
+
+As expected, the highly ranked genes are mostly on the X or Y chromosomes.
+
+```{r}
+chrom <- fit$genes$Chr
+plotMD(
+  fit, column = 2, status = chrom, values = c("X", "Y", "X|Y"),
+  hl.col = c("red", "blue", "green3"), 
+  main = "Male vs Female", legend = "bottomright"
+)
+abline(h = 0, col = "darkgrey")
+```
+
+### Gene set testing
+
+Get the list of genes belonging to the male-specific region of chromosome Y [34], and a list of genes located in the X chromosome that have been reported to escape X-inactivation [5]. The gender genes are available at http://bioinf.wehi.edu.au/software/GenderGenes/. We expect genes in the first list to be up-regulated in males, whereas genes in the second list should be up-regulated in females.
+
+```{r}
+load("data/yoruba/GenderGenes.RData")
+Ymale <- v$genes$GeneID %in% msYgenes
+Xescape <- v$genes$GeneID %in% XiEgenes
+```
+
+Roast gene set tests confirm that the male-specific genes are significantly up as a group in our comparison of males with females, whereas the X genes are significantly down as a group [44]:
+
+```{r}
+index <- list(Y = Ymale, X = Xescape)
+mroast(v, index, design, 2, block = Targets$cellline, correlation = cor$consensus, nrot = 9999)
+```
+
+The results from competitive camera gene sets tests are even more convincing [45]:
+
+```{r}
+camera(v, index, design, 2)
+```
+
+We can highlight the male-specific and X-escape genes on the mean-difference plot:
+
+```{r}
+status <- rep("Other",nrow(fit))
+status[Ymale] <- "Ymale"
+status[Xescape] <- "Xescape"
+plotMD(
+  fit, column = 2, status = status, 
+  values = c("Xescape", "Ymale"), hl.col = c("blue", "red"),
+  main = "Male vs Female", legend = "bottomright"
+)
+abline(h = 0, col = "darkgrey")
+```
+
+Another way to view the gene sets it to view the ranking of the Y and X specific genes in the differential expression results. This shows that, with a couple of exceptions, the Y specific genes are highly ranked (positive) while the X specific genes are low ranked (negative):
+
+```{r}
+barcodeplot(fit$t[, 2], Ymale, Xescape, labels = c("Down in male","Up in male"))
+legend("top", legend = c("Ymale genes", "Xescape genes"), lty = 1, col = c("red", "blue"))
+```
+
+### Session information
+
+```{r}
+sessionInfo()
+```
+
+### Acknowledgements
+
+Thanks for Yang Liao for mapping the reads and running featureCounts.
+
+## Differential Splicing after Pasilla Knockdown
+
+### Background
+
+This case study re-analyzes data produced by Brooks et al [3].
+
+The proteins NOVA1 and NOVA2 are known to regulate splicing in mammals. Brooks et al used _Drosophila melanogaster_ as a model system, and used an RNA interference system (RNAi) to knock down the expression of the _D. melanogaster_ ortholog of NOVA1 and NOVA2, which is Pasilla (ps). The experiment compared treated and untreated cells from the S2-DRSC cell line.
+
+In this case study we find exons and genes that are differentially expressed after ps knockdown, and we find genes are that are differentially spliced in the knockdown samples as compared to wild-type.
+
+For completeness, we will describe all the steps in the analysis from raw data files including mapping and alignment. If you want to skip the mapping and read counting steps, go straight to Section 18.2.6 where the statistical analysis begins.
+
+### GEO samples and SRA Files
+
+Brooks et al [3] deposited data for six RNA samples to GEO http://www.ncbi.nlm.nih.gov/geo. We have prepared the GEO accession numbers and titles in a csv file:
 
 
